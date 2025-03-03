@@ -1,18 +1,24 @@
+/*
+  Title          : redacted.c
+  Author         : Mane Galstyan
+  Created on     : May 6, 2024
+  Description    : pthreads used to search file for patter
+  Purpose        : To use mutex and pthreads
+  Usage          : redacted <num of threads> <pattern> <input file> <output file>
+  Build with     : gcc -o redacted redacted.c
+  Info           : used mutexts to avoid race conditons when modifiying an array and varible and the main thread writes to the file
+*/
+
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-//#include <libintl.h>
 #include <locale.h>
 #include <math.h>
-
-#include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <string.h>
 #include <sys/stat.h>
 #include <stdint.h>
 
@@ -58,6 +64,22 @@ typedef struct _task_data
 
 /*
 param:
+ display[] array to hold the displament for the file_buffer
+ distribute[] array that contains the number of values taken from file for each processor
+ pattern_size is the size of pattern
+ p is the number of processors
+description:
+ calculates the displacment based on the distrubution in the pattersize - 1 to account for pattern overlap for each processor
+*/
+void displacment(int displs[], int distribute[], size_t pattern_size, int p) {
+    displs[0] = 0;
+    for(int i = 1; i < p; i++) {
+        displs[i] = displs[i - 1] + distribute[i - 1] - (pattern_size - 1);
+    }
+}
+
+/*
+param:
  file_size which is size of file
  pattern_size is the size of pattern
  p is the number of processors
@@ -66,16 +88,21 @@ description:
  calculates the number of bytes from the file each processor should recieve
  each processor get atleast file_size/p and the extra is allocated to all but the last
 */
-void distribute_file(intmax_t file_size, size_t pattern_size, int p, int distribute[], int displs[]) {
-    int base_size = file_size / num_threads;
-    int extra = file_size % num_threads;
-    int overlap = pattern_size - 1;
-
-    for (int i = 0; i < num_threads; i++) {
-        distribute[i] = base_size + (i < extra ? 1 : 0) + (i < num_threads - 1 ? overlap : 0);
-        displs[i] = i > 0 ? displs[i-1] + distribute[i-1] - overlap : 0;
+void distribute_file(intmax_t file_size, size_t pattern_size, int p, int distribute[]) {
+    int n = file_size/p;
+    int r = file_size % p;
+    for(int i = 0; i < p; i++){
+        distribute[i] = n;
+        if(r > 0) {
+            distribute[i]++;
+            r--;
+        }
+        if(i < p - 1) {
+            distribute[i] += pattern_size - 1;
+        }
     }
 }
+
 
 /* function to search file_buffer at specifed location and compare to pattern*/
 void* find_string(void  *thread_data) {
@@ -112,7 +139,7 @@ int arg_to_num(char *arg) {
     errno = 0;
     int arg_num = strtol(arg, NULL, 10);
     if(errno == ERANGE || arg_num < 0 || arg_num >= file_size) {
-        fatal_error(errno, "Too many threads");
+        fatal_error(errno, "Invalid number of threads");
     }
     return arg_num;
 }
@@ -189,7 +216,8 @@ int main( int argc, char *argv[])
     /* convert num of threads to numbers*/
     num_threads = arg_to_num(argv[1]);
     
-    found = malloc(10 * sizeof(x));
+//    size_t max_matches = file_size - pattern_size - 2;
+    found = malloc(250 * sizeof(x));
     if (!found) {
         fatal_error(0, "Failed to allocate memory for found matches");
     }
@@ -199,21 +227,15 @@ int main( int argc, char *argv[])
     int displs[num_threads]; /* the place from the file each processor gets*/
     
     /* get the distubtion and displacment arrays set*/
-    distribute_file(file_size, pattern_size, num_threads, distribute,displs);
-//    
-//    
-//    for(int i = 0; i < num_threads; i++) {
-//        printf("distribute[%d] is %d\n", i, distribute[i]);
-//        printf("displs[%d] is %d\n", i, displs[i]);
-//    }
-//    
+    distribute_file(file_size-1, pattern_size, num_threads, distribute);
+    displacment(displs, distribute, pattern_size, num_threads);
 
     /* Allocate the array of threads, task_data structures, data and sums */
     threads     = calloc( num_threads, sizeof(pthread_t));
     thread_data = calloc( num_threads, sizeof(task_data));
 
-    if ( threads == NULL || thread_data == NULL)
-        exit(1);
+    if(threads == NULL || thread_data == NULL)
+        fatal_error(errno, "Failed to allocate memory for threads");
 
     /* count to hold the number of occurnces found*/
     count = 0;
@@ -227,7 +249,7 @@ int main( int argc, char *argv[])
         thread_data[t].last      = distribute[t] + displs[t];
         if(thread_data[t].last >= file_size - 1) thread_data[t].last = file_size - 2;
         thread_data[t].task_id   = t;
-
+//        printf("thread %d first: %d last: %d\n", thread_data[t].task_id, thread_data[t].first, thread_data[t].last);
         retval = pthread_create(&threads[t], &attr, find_string, (void *) &thread_data[t]);
         if ( retval ) {
             printf("ERROR; return code from pthread_create() is %d\n", retval);
@@ -259,7 +281,7 @@ int main( int argc, char *argv[])
     }
     for(int i = 0; i < count; i++) {
         memset(initialContent, REDACT_CHARS[found[i].thread_id % 64], pattern_size);
-        if(lseek(in_fd, found[i].index, SEEK_SET == (off_t)-1))
+        if(lseek(in_fd, found[i].index, SEEK_SET) == (off_t)-1)
             fatal_error(errno, "Error seeking in file");
         if(write(in_fd, initialContent, pattern_size) != pattern_size)
            fatal_error(errno, "Error writing to file");
