@@ -3,9 +3,10 @@ This is a parallel algorithm that uses threads to find all occurences of a parti
 
 ### Build with
 gcc -o redacted redacted.c
- redacted <num of threads> <pattern> <input file> <output file>
+
 ### Usage 
 redacted \<num of threads\> \<pattern\> \<input file\> \<output file\>
+
 The user must the number of threads it would like the program to use, the pattern to search for and the file that contains the text to search for the pattern in, and finally an output file where the redacted string will be written to.
 
 ### Output and Features
